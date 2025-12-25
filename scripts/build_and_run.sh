@@ -8,4 +8,5 @@ mkdir ./build && cd ./build
 cmake ..
 make
 
-./src/mini_pytorch3d
+cd ..
+./build/src/mini_pytorch3d
