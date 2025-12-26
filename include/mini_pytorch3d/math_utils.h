@@ -2,23 +2,31 @@
 #define MINI_PYTORCH3D_MATH_UTILS_H
 
 #include <vector>
+#include <array>
+#include <torch/types.h>
 
 namespace mini_pytorch3d {
-    struct float3 { float x, y, z; };
-    struct float4 { float x, y, z, w; };
+    using float3 = std::array<float, 3>;
+    using float4 = std::array<float, 4>;
+
+    using mat3 = std::array<float3, 3>;
+    using mat4 = std::array<float4, 4>;
     
-    struct mat3 { float x1, x2, x3;
-                  float y1, y2, y3;
-                  float z1, z2, z3; };
-    struct mat4 { float x1, x2, x3, x4;
-                  float y1, y2, y3, y4;
-                  float z1, z2, z3, z4;
-                         float w1, w2, w3, w4; };
+    /*
+    Must satisfy:
+        static_assert(std::is_standard_layout_v<float3>);
+        static_assert(std::is_trivially_copyable_v<float3>);
+        static_assert(sizeof(float3) == 3 * sizeof(float));
+    (Also same for other dtypes)
+
+    Maybe i should deprecate `using float3 = struct float3 { float x, y, z; };`
+        which is memory unsafe
+    */
 
     struct mesh {
-        std::vector<float3> vertices;
-        std::vector<float3> colors;
-        std::vector<float3> faces;
+        torch::Tensor vertices;
+        torch::Tensor colors;
+        torch::Tensor faces;
         std::size_t num_vertices;
         std::size_t num_faces;
     };
@@ -39,7 +47,12 @@ namespace mini_pytorch3d {
         float gamma;
     };
 
-    std::vector<float3> rand_range(std::size_t n);
+    struct triangle_buffer {
+        torch::Tensor clip_pos; // [N, 3, 4]
+        torch::Tensor inv_w;    // [N, 3]
+        torch::Tensor color;    // [N, 3, 3]
+        torch::Tensor faces;    // [N, 3]
+    };
 
 }  // namespace mini_pytorch3d
 

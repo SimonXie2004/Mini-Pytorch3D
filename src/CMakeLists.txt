@@ -4,6 +4,7 @@ add_executable(mini_pytorch3d
     input_parser.cpp
     test_env.cpp
     render.cpp
+    ../cuda/diffrast.cu
 )
 
 target_include_directories(mini_pytorch3d
