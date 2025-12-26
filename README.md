@@ -6,8 +6,10 @@
 # Create project directory
 git clone https://github.com/SimonXie2004/Mini-Pytorch3D
 
-# If you don't have uv, download and install first
-wget -qO- https://astral.sh/uv/install.sh | sh
+# If uv is not installed, download and install it
+if ! command -v uv >/dev/null 2>&1; then
+    wget -qO- https://astral.sh/uv/install.sh | sh
+fi
 
 # Create virtual environment
 uv venv --python 3.13 env_mini_pytorch3d
@@ -20,4 +22,13 @@ fi
 
 # Install dependencies
 uv pip install -r requirements.txt
+
+## Download resources (data & external libraries)
+bash scripts/download_resources.sh
+```
+
+## Build and Run
+
+```bash
+bash scripts/build_and_run.sh
 ```

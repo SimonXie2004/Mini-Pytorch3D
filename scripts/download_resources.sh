@@ -4,7 +4,7 @@ set -e
 
 # ====== change this if you need ======
 export TORCH_VERSION="2.9.1"
-export CUDA_VERSION="cu126"
+export CUDA_VERSION="cu128"
 # =====================================
 
 
@@ -23,11 +23,12 @@ else
     echo "[libtorch] libtorch not found, downloading with: "
     echo "Libtorch Version: $TORCH_VERSION + CUDA Version: $CUDA_VERSION"
 
-    curl -L "$LIBTORCH_URL" -o "$LIBTORCH_ZIP"
+    wget "$LIBTORCH_URL" -O "$LIBTORCH_ZIP"
     unzip -q "$LIBTORCH_ZIP"
     rm "$LIBTORCH_ZIP"
 
     echo "[libtorch] Downloaded to external/libtorch"
+    cd ..
 fi
 
 
