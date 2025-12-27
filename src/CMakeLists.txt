@@ -10,6 +10,7 @@ add_executable(mini_pytorch3d
 target_include_directories(mini_pytorch3d
     PRIVATE
         ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/external
 )
 
 target_link_libraries(mini_pytorch3d

@@ -2,7 +2,11 @@
 #include <mini_pytorch3d/math_utils.h>
 #include <torch/torch.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb/stb_image_write.h>
+
 namespace mini_pytorch3d {
+
     struct mesh parse_obj(const std::string& file_path) {
         // Only reads v lines and f lines; Ignores vt, vn, # lines.
         FILE *file = fopen(file_path.c_str(), "r");
@@ -50,4 +54,25 @@ namespace mini_pytorch3d {
         };
         return m;
     }
+
+    void save_tensor_as_png(const torch::Tensor& img, const std::string& path) {
+        TORCH_CHECK(img.device().is_cpu(), "Tensor must be on CPU");
+        TORCH_CHECK(img.dim() == 3 && img.size(2) == 3, "Expect HxWx3");
+
+        torch::Tensor img_u8;
+
+        if (img.dtype() == torch::kFloat) {
+            img_u8 = img.clamp(0, 1).mul(255).to(torch::kU8);
+        } else {
+            img_u8 = img.to(torch::kU8);
+        }
+
+        img_u8 = img_u8.contiguous();
+
+        int H = img_u8.size(0);
+        int W = img_u8.size(1);
+
+        stbi_write_png(path.c_str(), W, H, 3, img_u8.data_ptr(), W * 3);
+    }
+
 }  // namespace mini_pytorch3d

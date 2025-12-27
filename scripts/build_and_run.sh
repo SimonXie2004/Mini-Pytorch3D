@@ -10,4 +10,4 @@ cmake --build build -j$(nproc) # cmake --build <build_dir> [--target <tgt>] [--c
 
 nvcc -V
 
-./build/src/mini_pytorch3d
+./build/src/mini_pytorch3d data/stanford_dragon.obj output/output.png

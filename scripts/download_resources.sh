@@ -8,7 +8,7 @@ export CUDA_VERSION="cu128"
 # =====================================
 
 
-# 1. download external/libtorch
+# 1. download external/
 TORCH_CONFIG="external/libtorch/share/cmake/Torch/TorchConfig.cmake"
 
 if [ -f "$TORCH_CONFIG" ]; then
@@ -30,6 +30,9 @@ else
     echo "[libtorch] Downloaded to external/libtorch"
     cd ..
 fi
+
+mkdir -p external/stb
+wget https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image_write.h -O external/stb/stb_image_write.h
 
 
 # 2. download data/*

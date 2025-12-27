@@ -1,7 +1,6 @@
 #ifndef MINI_PYTORCH3D_MATH_UTILS_H
 #define MINI_PYTORCH3D_MATH_UTILS_H
 
-#include <vector>
 #include <array>
 #include <torch/types.h>
 
@@ -48,11 +47,13 @@ namespace mini_pytorch3d {
     };
 
     struct triangle_buffer {
-        torch::Tensor clip_pos; // [N, 3, 4]
-        torch::Tensor inv_w;    // [N, 3]
-        torch::Tensor color;    // [N, 3, 3]
+        torch::Tensor clip_pos; // [N, 4]
+        torch::Tensor inv_w;    // [N, 1]
+        torch::Tensor colors;   // [N, 3]
         torch::Tensor faces;    // [N, 3]
     };
+
+    torch::Tensor camera_to_mvp_matrix(const camera& cam);
 
 }  // namespace mini_pytorch3d
 

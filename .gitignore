@@ -3,5 +3,6 @@ external/*
 
 data
 build
+output
 
 TODO.md

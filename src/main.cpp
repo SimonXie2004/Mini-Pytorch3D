@@ -5,12 +5,16 @@
 #include <mini_pytorch3d/render.h>
 #include <iostream>
 
-int main() {
+// ./build/src/mini_pytorch3d data/stanford_dragon.obj output/output.png
+int main(int argc, char **argv) {
     // test_torch();
 
-    auto mesh = mini_pytorch3d::parse_obj("data/utah_teapot.obj");
-    // auto mesh = mini_pytorch3d::parse_obj("data/stanford_dragon.obj");
-    // auto mesh = mini_pytorch3d::parse_obj("data/stanford_bunny.obj");
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <path_to_obj> <output_image_path>" << std::endl;
+        return -1;
+    }
+
+    auto mesh = mini_pytorch3d::parse_obj(argv[1]);
     std::cout << "Parsed mesh with " << mesh.vertices.size(0) << " vertices and "
               << mesh.faces.size(0) << " faces." << std::endl;
 
@@ -32,6 +36,8 @@ int main() {
         }
     );
     std::cout << "Rendered image size: " << diffrast_image.sizes() << std::endl;
+
+    mini_pytorch3d::save_tensor_as_png(diffrast_image, argv[2]);
 
     return 0;
 }
