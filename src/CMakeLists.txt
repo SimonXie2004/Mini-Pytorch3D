@@ -1,8 +1,6 @@
 add_executable(mini_pytorch3d
     main.cpp
-    math_utils.cpp
-    input_parser.cpp
-    test_env.cpp
+    io.cpp
     render.cpp
     ../cuda/diffrast.cu
 )

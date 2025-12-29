@@ -4,5 +4,6 @@ This folder should be created by <mini-pytorch3d-root>/scripts/download_resource
 
 ```
 external/
+  ├── stb                # Image IO
   └── libtorch/          # PyTorch C++ API
 ```

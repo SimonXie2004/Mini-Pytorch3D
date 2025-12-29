@@ -1,14 +1,11 @@
 #include <torch/torch.h>
-#include <mini_pytorch3d/test_env.h>
-#include <mini_pytorch3d/math_utils.h>
-#include <mini_pytorch3d/input_parser.h>
+#include <mini_pytorch3d/io.h>
+#include <mini_pytorch3d/types.h>
 #include <mini_pytorch3d/render.h>
 #include <iostream>
 
 // ./build/src/mini_pytorch3d data/stanford_dragon.obj output/output.png
 int main(int argc, char **argv) {
-    // test_torch();
-
     if (argc != 3) {
         std::cerr << "Usage: " << argv[0] << " <path_to_obj> <output_image_path>" << std::endl;
         return -1;
@@ -20,7 +17,7 @@ int main(int argc, char **argv) {
 
     auto diffrast_image = mini_pytorch3d::render(mesh, 
         mini_pytorch3d::camera{
-            .position = {0.0f, 0.0f, 3.0f},
+            .position = {0.0f, 0.0f, 1.0f}, // supposes there is a light source here
             .look_at = {0.0f, 0.0f, 0.0f},
             .up = {0.0f, 1.0f, 0.0f},
             .fov = 60.0f,
@@ -31,13 +28,16 @@ int main(int argc, char **argv) {
             .W = 512
         },
         mini_pytorch3d::diffrast_args{
-            .sigma = 1e-5f,
-            .gamma = 1e-4f
-        }
+            .sigma = 1,
+        }, 
+        mini_pytorch3d::SIMPLE_RAST, 
+        true // requires_grad
     );
+    // std::cout << "Rendered image: " << diffrast_image << std::endl;
     std::cout << "Rendered image size: " << diffrast_image.sizes() << std::endl;
 
     mini_pytorch3d::save_tensor_as_png(diffrast_image, argv[2]);
+    std::cout << "Saved rendered image to " << argv[2] << std::endl;
 
     return 0;
 }

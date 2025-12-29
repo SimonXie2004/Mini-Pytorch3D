@@ -1,5 +1,5 @@
-#ifndef MINI_PYTORCH3D_INPUT_PARSER_H
-#define MINI_PYTORCH3D_INPUT_PARSER_H
+#ifndef MINI_PYTORCH3D_IO_H
+#define MINI_PYTORCH3D_IO_H
 
 #include <torch/types.h>
 #include <string>
@@ -12,4 +12,4 @@ namespace mini_pytorch3d {
 
 }  // namespace mini_pytorch3d
 
-#endif // MINI_PYTORCH3D_INPUT_PARSER_H
+#endif // MINI_PYTORCH3D_IO_H
