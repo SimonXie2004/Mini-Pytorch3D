@@ -19,7 +19,8 @@ math: katex
     2.1 **Online** Pixel Blending (Online Softmax)
     2.2 **TILE** Based Rasterzation
     2.3 **Parallel** Triangle Bincount
-3. Summary
+3. Metrics
+4. Summary
 
 ---
 
