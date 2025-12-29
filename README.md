@@ -2,6 +2,20 @@
 
 > CS121 (Parallel Computing) Final Project: Parallel diffrast forward kernel
 
+<table width="100%">
+  <tr>
+    <td>
+      <img src="report/images/teapot.png" width="100%">
+    </td>
+    <td>
+      <img src="report/images/dragon.png" width="100%">
+    </td>
+    <td>
+      <img src="report/images/bunny.png" width="100%">
+    </td>
+  </tr>
+</table>
+
 ## Environment Setup
 
 ```bash
