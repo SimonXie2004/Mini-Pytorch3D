@@ -1,13 +1,45 @@
 #include <mini_pytorch3d/render.h>
+#include <mini_pytorch3d/constants.h>
+#include <mini_pytorch3d/legacy.h>
+
 #include <iostream>
 #include <utility>
 
+#include <cuda.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+
 namespace mini_pytorch3d {
-    
-    // implemenation in cuda/diffrast.cu
+
+    // implemenation in src/legacy.cpp (for comparison)
     torch::Tensor rast(const triangle_buffer& tb, int image_width, int image_height, const torch::Tensor& light_dir);
     torch::Tensor sequential_diffrast(const triangle_buffer& tb, const diffrast_args& args, int image_width, int image_height, const torch::Tensor& light_dir);
+    // implemenation in src/render.cpp (here, below)
     torch::Tensor parallel_diffrast(const triangle_buffer& tb, const diffrast_args& args, int image_width, int image_height, const torch::Tensor& light_dir);
+    // implemenation in cuda/diffrast.cu (NOT here)
+    void launch_parallel_diffrast_kernel(
+        const float* clip_pos,
+        const float* inv_w,
+        const float* colors,
+        const float* normals,
+        const int64_t* faces,
+        const int* tile_offsets,
+        const int* tile_faces,
+        int W, int H, float sigma,
+        const float* light_dir,
+        float* out
+    );
+    void launch_binning_two_pass(
+        const float* clip_pos,
+        const float* inv_w,
+        const int64_t* faces,
+        int F,
+        int W, int H,
+        int* tile_offsets,
+        int* tile_faces_flat,
+        int* total_pairs_out,
+        cudaStream_t stream
+    );
 
     torch::Tensor camera_to_mvp_matrix(const camera& cam) {
         torch::Tensor M = torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32));
@@ -71,7 +103,7 @@ namespace mini_pytorch3d {
         
         mini_pytorch3d::triangle_buffer tb {
             .colors = m.colors,
-            .faces = m.faces - 1
+            .faces = (m.faces - 1).to(torch::kInt64),
         }; 
 
         // clip pos
@@ -101,6 +133,7 @@ namespace mini_pytorch3d {
         return {tb, light_dir_cam};
     }
 
+    // Main render function; for manager use
     torch::Tensor render(const mesh& m, const camera& cam, 
         const diffrast_args& args, int render_mode, bool requires_grad) {
 
@@ -109,10 +142,18 @@ namespace mini_pytorch3d {
         m.vertices.set_requires_grad(requires_grad);
         m.colors.set_requires_grad(requires_grad);
         m.faces.set_requires_grad(false);
+        m.normals.set_requires_grad(false);
 
         auto [tb, light_dir_cam] = transform_mesh_and_light(m, cam); 
         
+        auto start = std::chrono::high_resolution_clock::now();
+
         if (render_mode == PARALLEL_DIFFRAST) {
+            tb.clip_pos = tb.clip_pos.to(torch::kCUDA);
+            tb.inv_w    = tb.inv_w.to(torch::kCUDA);
+            tb.colors   = tb.colors.to(torch::kCUDA);
+            tb.normals  = tb.normals.to(torch::kCUDA);
+            tb.faces    = tb.faces.to(torch::kCUDA);
             image = parallel_diffrast(tb, args, cam.W, cam.H, light_dir_cam);
         } 
         else if (render_mode == SEQUENTIAL_DIFFRAST) {
@@ -122,7 +163,96 @@ namespace mini_pytorch3d {
             image = rast(tb, cam.W, cam.H, light_dir_cam);
         }
 
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Rendering took " << duration.count() << " ms" << std::endl;
+
         return image;
     }
 
+    // Implementation of parallel differentiable rasterization
+    torch::Tensor parallel_diffrast(
+        const triangle_buffer& tb,
+        const diffrast_args& args,
+        int image_width,
+        int image_height,
+        const torch::Tensor& light_dir
+    ) {
+        TORCH_CHECK(tb.clip_pos.is_cuda(), "triangle_buffer.clip_pos must be on CUDA");
+        at::cuda::CUDAGuard guard(tb.clip_pos.device());
+        cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
+
+        // move to cuda
+        auto clip   = tb.clip_pos.contiguous();
+        auto invw   = tb.inv_w.view({-1}).contiguous();
+        auto colors = tb.colors.contiguous();
+        auto normals= tb.normals.contiguous();
+        auto faces  = tb.faces.to(torch::kInt64).contiguous();
+        auto light  = light_dir.to(torch::kCUDA).to(torch::kFloat32).contiguous();
+
+        int F = (int)faces.size(0);
+
+        int tiles_x = (image_width  + TILE - 1) / TILE;
+        int tiles_y = (image_height + TILE - 1) / TILE;
+        int num_tiles = tiles_x * tiles_y;
+
+        // allocate binning output on cuda
+        auto opts_i32 = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+
+        auto tile_offsets = torch::empty({num_tiles + 1}, opts_i32);
+        auto total_pairs_dev = torch::empty({1}, opts_i32);
+        int64_t cap = (int64_t)F * MAX_TILES_PER_TRIANGLE;
+        if (cap < 1) cap = 1;
+        auto tile_faces_flat_cap = torch::empty({cap}, opts_i32);
+
+        // two pass binning
+        launch_binning_two_pass(
+            clip.data_ptr<float>(),
+            invw.data_ptr<float>(),
+            faces.data_ptr<int64_t>(),
+            F,
+            image_width,
+            image_height,
+            tile_offsets.data_ptr<int>(),
+            tile_faces_flat_cap.data_ptr<int>(),
+            total_pairs_dev.data_ptr<int>(),
+            stream
+        );
+
+        // read total_pairs (small scalar copy; stays async-safe wrt stream ordering)
+        int total_pairs = total_pairs_dev.cpu().item<int>();
+        TORCH_CHECK(total_pairs >= 0, "total_pairs < 0, binning failed?");
+        TORCH_CHECK((int64_t)total_pairs <= cap,
+                    "tile_faces_flat capacity too small: total_pairs=", total_pairs,
+                    " cap=", cap,
+                    " (increase cap multiplier, e.g., F*16)");
+
+        // slice exact used range
+        auto tile_faces_flat = tile_faces_flat_cap.narrow(0, 0, total_pairs);
+
+        // output & rast kernel
+        auto out = torch::zeros(
+            {image_height, image_width, 3},
+            torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)
+        );
+
+        launch_parallel_diffrast_kernel(
+            clip.data_ptr<float>(),
+            invw.data_ptr<float>(),
+            colors.data_ptr<float>(),
+            normals.data_ptr<float>(),
+            faces.data_ptr<int64_t>(),
+            tile_offsets.data_ptr<int>(),
+            tile_faces_flat.data_ptr<int>(),
+            image_width,
+            image_height,
+            args.sigma,
+            light.data_ptr<float>(),
+            out.data_ptr<float>()
+        );
+
+        return out;
+    }
+
+    
 }  // namespace mini_pytorch3d

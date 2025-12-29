@@ -1,237 +1,213 @@
-#include <torch/torch.h>
-#include <mini_pytorch3d/types.h>
-#include <iostream>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <math.h>
+#include <mini_pytorch3d/constants.h>
 
 namespace mini_pytorch3d {
 
-    inline float edge_fn(const vec2& a, const vec2& b, float px, float py) {
-        return (px - a[0]) * (b[1] - a[1]) - (py - a[1]) * (b[0] - a[0]);
+    __device__ __forceinline__
+    float edge_fn(float ax, float ay, float bx, float by, float px, float py) {
+        return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
     }
 
-    inline bool is_top_left(const vec2& a, const vec2& b) {
-        return (a[1] < b[1]) || (a[1] == b[1] && a[0] > b[0]);
+    __device__ __forceinline__
+    bool is_top_left(float ax, float ay, float bx, float by) {
+        float dy = by - ay;
+        float dx = bx - ax;
+        return (dy > 0) || (dy == 0 && dx < 0);
     }
 
-    // Implementation of parallel differentiable rasterization
-    torch::Tensor parallel_diffrast(const triangle_buffer& tb, const diffrast_args& args, 
-                            int image_width, int image_height, const torch::Tensor& light_dir) {
-        
-        
-        return torch::zeros({image_height, image_width, 3}, torch::kU8); // Placeholder
+    __device__ __forceinline__
+    float3 f3_add(const float3& a, const float3& b) {
+        return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
     }
 
-    // Implementation of sequential differentiable rasterization
-    // (unrelated, just for performance comparison)
-    torch::Tensor sequential_diffrast(const triangle_buffer& tb, const diffrast_args& args, 
-                            int image_width, int image_height, const torch::Tensor& light_dir) {
-        // r, g, b, running_max, weight_sum
-        auto image_buffer = torch::zeros({image_height, image_width, 5}, torch::kFloat32);
-        image_buffer.index_put_({"...", 3}, -1e10f);
+    __device__ __forceinline__
+    float3 f3_mul(const float3& a, float s) {
+        return make_float3(a.x * s, a.y * s, a.z * s);
+    }
 
-        for (std::size_t i = 0; i < tb.faces.size(0); ++i) {
-            auto face = tb.faces[i];
-            auto idx0 = face[0].item<int64_t>();
-            auto idx1 = face[1].item<int64_t>();
-            auto idx2 = face[2].item<int64_t>();
-            
-            auto v0 = tb.clip_pos[idx0];
-            auto v1 = tb.clip_pos[idx1];
-            auto v2 = tb.clip_pos[idx2];
+    __device__ __forceinline__
+    float f3_dot(const float3& a, const float3& b) {
+        return a.x*b.x + a.y*b.y + a.z*b.z;
+    }
 
-            v0 = v0 / v0[3];
-            v1 = v1 / v1[3];
-            v2 = v2 / v2[3];
+    __device__ __forceinline__
+    float3 f3_normalize(const float3& v) {
+        float n2 = f3_dot(v, v);
+        float inv = rsqrtf(fmaxf(n2, 1e-20f));
+        return f3_mul(v, inv);
+    }
 
-            // bbox rast
-            vec2 sv0 = {
-                (v0[0].item<float>() * 0.5f + 0.5f) * image_width,
-                (-v0[1].item<float>() * 0.5f + 0.5f) * image_height
-            };
-            vec2 sv1 = {
-                (v1[0].item<float>() * 0.5f + 0.5f) * image_width,
-                (-v1[1].item<float>() * 0.5f + 0.5f) * image_height
-            };
-            vec2 sv2 = {
-                (v2[0].item<float>() * 0.5f + 0.5f) * image_width,
-                (-v2[1].item<float>() * 0.5f + 0.5f) * image_height
-            };
+    __device__ __forceinline__
+    float3 diffuse_only_phong_shading(
+        const float3& normal,
+        const float3& light_dir,
+        const float3& base_color
+    ) {
+        // double-sided diffuse
+        float ndl1 = f3_dot(normal, light_dir);
+        float ndl2 = f3_dot(f3_mul(normal, -1.f), light_dir);
+        float diffuse = fmaxf(0.f, fmaxf(ndl1, ndl2));
 
-            int xmin = std::max(0, (int)std::floor(std::min({sv0[0], sv1[0], sv2[0]})));
-            int xmax = std::min(image_width - 1, (int)std::ceil(std::max({sv0[0], sv1[0], sv2[0]})));
-            int ymin = std::max(0, (int)std::floor(std::min({sv0[1], sv1[1], sv2[1]})));
-            int ymax = std::min(image_height - 1, (int)std::ceil(std::max({sv0[1], sv1[1], sv2[1]})));
+        return f3_mul(base_color, diffuse);
+    }
 
-            float area = edge_fn(sv0, sv1, sv2[0], sv2[1]);
-            if (std::abs(area) < 1e-8f) continue;
-            
-            // rast loop
-            for (int y = ymin; y <= ymax; ++y) {
-                for (int x = xmin; x <= xmax; ++x) {
+    __global__ void parallel_diffrast_kernel(
+        const float* clip_pos,
+        const float* inv_w,
+        const float* colors,
+        const float* normals,
+        const int64_t* faces,
+        const int32_t* tile_offsets,
+        const int32_t* tile_faces,
+        int W, int H, float sigma,
+        const float* light_dir,
+        float* out
+    ) {
+        int tx = blockIdx.x;
+        int ty = blockIdx.y;
 
-                    float px = x + 0.5f;
-                    float py = y + 0.5f;
+        int lx = threadIdx.x;
+        int ly = threadIdx.y;
+        int tid = ly * TILE + lx;
 
-                    float e0 = edge_fn(sv1, sv2, px, py);
-                    float e1 = edge_fn(sv2, sv0, px, py);
-                    float e2 = edge_fn(sv0, sv1, px, py);
+        int px = tx * TILE + lx;
+        int py = ty * TILE + ly;
 
-                    bool inside =
-                        (e0 > 0 || (e0 == 0 && is_top_left(sv1, sv2))) &&
-                        (e1 > 0 || (e1 == 0 && is_top_left(sv2, sv0))) &&
-                        (e2 > 0 || (e2 == 0 && is_top_left(sv0, sv1)));
-                    if (!inside) continue;
+        __shared__ float sh_max[TILE_PIX];
+        __shared__ float sh_sum[TILE_PIX];
+        __shared__ float3 sh_sum_c[TILE_PIX];
 
-                    float w0 = e0 / area;
-                    float w1 = e1 / area;
-                    float w2 = 1.0f - w0 - w1;
-                    if (w0 < 0 || w1 < 0 || w2 < 0) continue; 
+        sh_max[tid] = -1e10f;
+        sh_sum[tid] = 0.f;
+        sh_sum_c[tid] = make_float3(0,0,0);
+        __syncthreads();
 
-                    float depth =
-                        w0 * v0[2].item<float>() +
-                        w1 * v1[2].item<float>() +
-                        w2 * v2[2].item<float>();
+        int tile_id = ty * gridDim.x + tx;
+        int begin = tile_offsets[tile_id];
+        int end = tile_offsets[tile_id + 1];
 
-                    // phong shading (diffuse only)
-                    auto normal = w0 * tb.normals[idx0] + 
-                                 w1 * tb.normals[idx1] + 
-                                 w2 * tb.normals[idx2];
-                    
-                    auto normal_normalized = normal / torch::norm(normal);
-                    float n_dot_l_1 = torch::dot(normal_normalized, light_dir).item<float>();
-                    float n_dot_l_2 = torch::dot(-normal_normalized, light_dir).item<float>();
-                    float diffuse = std::max(0.0f, std::max(n_dot_l_1, n_dot_l_2));
-                    
-                    auto base_color = w0 * tb.colors[idx0] + 
-                                     w1 * tb.colors[idx1] + 
-                                     w2 * tb.colors[idx2];
-                    
-                    auto color = base_color * diffuse;
-                    
-                    // online softmax
-                    // weight sum update:   old_weight_sum * exp(old_max - new_max) + exp(logit - new_max)
-                    // color update:        (old_color * old_weight_sum * exp(old_max - new_max) + new_color * exp(logit - new_max)) / updated_weight_sum
-                    float logit = -depth / args.sigma; // negative, closer is higher weight
-                    float old_max = image_buffer[y][x][3].item<float>();
-                    float new_max = std::max(old_max, logit);
-                    float old_weight_sum = image_buffer[y][x][4].item<float>();
-                    float updated_weight_sum = old_weight_sum * std::exp(old_max - new_max) + std::exp(logit - new_max);
-                    
-                    float rescale_factor = std::exp(old_max - new_max);
-                    
-                    for (int c = 0; c < 3; ++c) {
-                        float old_color = image_buffer[y][x][c].item<float>();
-                        float new_color_contribution = color[c].item<float>() * std::exp(logit - new_max);
-                        float updated_color = (old_color * old_weight_sum * rescale_factor + new_color_contribution) / updated_weight_sum;
-                        image_buffer[y][x][c] = updated_color;
-                    }
-                    
-                    image_buffer[y][x][3] = new_max;
-                    image_buffer[y][x][4] = updated_weight_sum;
-                }
-            }
+        float px_c = px + 0.5f;
+        float py_c = py + 0.5f;
+
+        for (int it = begin; it < end; ++it) {
+            int f = tile_faces[it];
+            int i0 = faces[3*f+0];
+            int i1 = faces[3*f+1];
+            int i2 = faces[3*f+2];
+
+            float w0 = inv_w[i0];
+            float w1 = inv_w[i1];
+            float w2 = inv_w[i2];
+
+            float x0 = clip_pos[4*i0+0] * w0;
+            float y0 = clip_pos[4*i0+1] * w0;
+            float z0 = clip_pos[4*i0+2] * w0;
+            float x1 = clip_pos[4*i1+0] * w1;
+            float y1 = clip_pos[4*i1+1] * w1;
+            float z1 = clip_pos[4*i1+2] * w1;
+            float x2 = clip_pos[4*i2+0] * w2;
+            float y2 = clip_pos[4*i2+1] * w2;
+            float z2 = clip_pos[4*i2+2] * w2;
+
+            float sx0 = (x0 * 0.5f + 0.5f) * W;
+            float sy0 = (-y0 * 0.5f + 0.5f) * H;
+            float sx1 = (x1 * 0.5f + 0.5f) * W;
+            float sy1 = (-y1 * 0.5f + 0.5f) * H;
+            float sx2 = (x2 * 0.5f + 0.5f) * W;
+            float sy2 = (-y2 * 0.5f + 0.5f) * H;
+
+            float area = edge_fn(sx0, sy0, sx1, sy1, sx2, sy2);
+            if (fabsf(area) < 1e-8f) continue;
+
+            float e0 = edge_fn(sx1, sy1, sx2, sy2, px_c, py_c);
+            float e1 = edge_fn(sx2, sy2, sx0, sy0, px_c, py_c);
+            float e2 = edge_fn(sx0, sy0, sx1, sy1, px_c, py_c);
+
+            bool inside =
+                (e0 > 0 || (e0 == 0 && is_top_left(sx1, sy1, sx2, sy2))) &&
+                (e1 > 0 || (e1 == 0 && is_top_left(sx2, sy2, sx0, sy0))) &&
+                (e2 > 0 || (e2 == 0 && is_top_left(sx0, sy0, sx1, sy1)));
+
+            if (!inside) continue;
+
+            float b0 = e0 / area;
+            float b1 = e1 / area;
+            float b2 = 1.f - b0 - b1;
+            if (b0 < 0 || b1 < 0 || b2 < 0) continue;
+
+            float depth = b0*z0 + b1*z1 + b2*z2;
+
+            // diffuse only shading
+            float3 n = make_float3(
+                normals[3*i0+0]*b0 + normals[3*i1+0]*b1 + normals[3*i2+0]*b2,
+                normals[3*i0+1]*b0 + normals[3*i1+1]*b1 + normals[3*i2+1]*b2,
+                normals[3*i0+2]*b0 + normals[3*i1+2]*b1 + normals[3*i2+2]*b2
+            );
+            float3 nn = f3_normalize(n);
+            float3 L = make_float3(light_dir[0], light_dir[1], light_dir[2]);
+            float3 base = make_float3(
+                colors[3*i0+0]*b0 + colors[3*i1+0]*b1 + colors[3*i2+0]*b2,
+                colors[3*i0+1]*b0 + colors[3*i1+1]*b1 + colors[3*i2+1]*b2,
+                colors[3*i0+2]*b0 + colors[3*i1+2]*b1 + colors[3*i2+2]*b2
+            );
+            float3 col = diffuse_only_phong_shading(nn, L, base);
+
+            // online softmax
+            float logit = -depth / sigma;
+
+            float old_max = sh_max[tid];
+            float new_max = fmaxf(old_max, logit);
+            float rescale = expf(old_max - new_max);
+            float exp_new = expf(logit - new_max);
+
+            sh_sum[tid] = sh_sum[tid] * rescale + exp_new;
+            sh_sum_c[tid] = f3_add(
+                f3_mul(sh_sum_c[tid], rescale), 
+                f3_mul(col, exp_new)
+            );
+            sh_max[tid] = new_max;
         }
 
-        return image_buffer.slice(2, 0, 3);
-    }
-
-    // Implementation of NON-differentiable, SINGLE-thread rasterization 
-    // (unrelated, just for fun)
-    torch::Tensor rast(const triangle_buffer& tb, int image_width, int image_height, const torch::Tensor& light_dir) {
-        // r, g, b, z
-        auto image_buffer = torch::zeros({image_height, image_width, 4}, torch::kFloat32);
-        image_buffer.index_put_({"...", 3}, 1e10f); 
-
-        for (std::size_t i = 0; i < tb.faces.size(0); ++i) {
-            auto face = tb.faces[i];
-            auto idx0 = face[0].item<int64_t>();
-            auto idx1 = face[1].item<int64_t>();
-            auto idx2 = face[2].item<int64_t>();
-            
-            auto v0 = tb.clip_pos[idx0];
-            auto v1 = tb.clip_pos[idx1];
-            auto v2 = tb.clip_pos[idx2];
-
-            v0 = v0 / v0[3];
-            v1 = v1 / v1[3];
-            v2 = v2 / v2[3];
-
-            // bbox rast
-            vec2 sv0 = {
-                (v0[0].item<float>() * 0.5f + 0.5f) * image_width,
-                (-v0[1].item<float>() * 0.5f + 0.5f) * image_height
-            };
-            vec2 sv1 = {
-                (v1[0].item<float>() * 0.5f + 0.5f) * image_width,
-                (-v1[1].item<float>() * 0.5f + 0.5f) * image_height
-            };
-            vec2 sv2 = {
-                (v2[0].item<float>() * 0.5f + 0.5f) * image_width,
-                (-v2[1].item<float>() * 0.5f + 0.5f) * image_height
-            };
-
-            int xmin = std::max(0, (int)std::floor(std::min({sv0[0], sv1[0], sv2[0]})));
-            int xmax = std::min(image_width - 1, (int)std::ceil(std::max({sv0[0], sv1[0], sv2[0]})));
-            int ymin = std::max(0, (int)std::floor(std::min({sv0[1], sv1[1], sv2[1]})));
-            int ymax = std::min(image_height - 1, (int)std::ceil(std::max({sv0[1], sv1[1], sv2[1]})));
-
-            float area = edge_fn(sv0, sv1, sv2[0], sv2[1]);
-            if (std::abs(area) < 1e-8f) continue;
-            
-            // rast loop
-            for (int y = ymin; y <= ymax; ++y) {
-                for (int x = xmin; x <= xmax; ++x) {
-
-                    float px = x + 0.5f;
-                    float py = y + 0.5f;
-
-                    float e0 = edge_fn(sv1, sv2, px, py);
-                    float e1 = edge_fn(sv2, sv0, px, py);
-                    float e2 = edge_fn(sv0, sv1, px, py);
-
-                    bool inside =
-                        (e0 > 0 || (e0 == 0 && is_top_left(sv1, sv2))) &&
-                        (e1 > 0 || (e1 == 0 && is_top_left(sv2, sv0))) &&
-                        (e2 > 0 || (e2 == 0 && is_top_left(sv0, sv1)));
-                    if (!inside) continue;
-
-                    float w0 = e0 / area;
-                    float w1 = e1 / area;
-                    float w2 = 1.0f - w0 - w1;
-                    if (w0 < 0 || w1 < 0 || w2 < 0) continue; 
-
-                    float depth =
-                        w0 * v0[2].item<float>() +
-                        w1 * v1[2].item<float>() +
-                        w2 * v2[2].item<float>();
-
-                    if (depth < image_buffer[y][x][3].item<float>()) {
-                        // phong shading (diffuse only)
-                        auto normal = w0 * tb.normals[idx0] + 
-                                     w1 * tb.normals[idx1] + 
-                                     w2 * tb.normals[idx2];
-                        
-                        auto normal_normalized = normal / torch::norm(normal);
-                        // Use passed-in light direction
-                        float n_dot_l_1 = torch::dot(normal_normalized, light_dir).item<float>();
-                        float n_dot_l_2 = torch::dot(-normal_normalized, light_dir).item<float>();
-                        float diffuse = std::max(0.0f, std::max(n_dot_l_1, n_dot_l_2)); // in case the normal points the opposite
-                        
-                        auto base_color = w0 * tb.colors[idx0] + 
-                                         w1 * tb.colors[idx1] + 
-                                         w2 * tb.colors[idx2];
-                        
-                        auto color = base_color * diffuse;
-                        
-                        image_buffer[y][x][0] = color[0].item<float>();
-                        image_buffer[y][x][1] = color[1].item<float>();
-                        image_buffer[y][x][2] = color[2].item<float>();
-                        image_buffer[y][x][3] = depth;
-                    }
-                }
-            }
+        if (px < W && py < H && sh_sum[tid] > 0) {
+            float3 c = f3_mul(sh_sum_c[tid], 1.f / sh_sum[tid]);
+            int p = (py * W + px) * 3;
+            out[p+0] = c.x;
+            out[p+1] = c.y;
+            out[p+2] = c.z;
         }
 
-        return image_buffer.slice(2, 0, 3);
+    }
+
+    void launch_parallel_diffrast_kernel(
+        const float* clip_pos,
+        const float* inv_w,
+        const float* colors,
+        const float* normals,
+        const int64_t* faces,
+        const int32_t* tile_offsets,
+        const int32_t* tile_faces,
+        int W, int H, float sigma,
+        const float* light_dir,
+        float* out
+    ) {
+        dim3 block(TILE, TILE);
+        dim3 grid((W + TILE - 1) / TILE,
+                (H + TILE - 1) / TILE);
+
+        parallel_diffrast_kernel<<<grid, block>>>(
+            clip_pos,
+            inv_w,
+            colors,
+            normals,
+            faces,
+            tile_offsets,
+            tile_faces,
+            W, H, sigma,
+            light_dir,
+            out
+        );
     }
 
 } // namespace mini_pytorch3d

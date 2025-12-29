@@ -11,8 +11,7 @@ cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS_DEBUG="-O0 -g -rdynamic" \
   -DCMAKE_EXE_LINKER_FLAGS="-rdynamic" \
-  -DCMAKE_CUDA_FLAGS_DEBUG="-O0 -g -G" \
-  -DCMAKE_VERBOSE_MAKEFILE=ON # debug mode
+  -DCMAKE_CUDA_FLAGS_DEBUG="-O0 -g -G" # debug mode
 
 # cmake --build <build_dir> [--target <tgt>] [--config <cfg>] [-- -jN]
 cmake --build build -j$(nproc)

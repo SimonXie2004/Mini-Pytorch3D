@@ -1,5 +1,7 @@
 # Mini-Pytorch3D
 
+> CS121 (Parallel Computing) Final Project: Parallel diffrast forward kernel
+
 ## Environment Setup
 
 ```bash

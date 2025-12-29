@@ -86,15 +86,16 @@ namespace mini_pytorch3d {
     }
 
     void save_tensor_as_png(const torch::Tensor& img, const std::string& path) {
-        TORCH_CHECK(img.device().is_cpu(), "Tensor must be on CPU");
         TORCH_CHECK(img.dim() == 3 && img.size(2) == 3, "Expect HxWx3");
+
+        auto img_cpu = img.detach().cpu(); 
 
         torch::Tensor img_u8;
 
-        if (img.dtype() == torch::kFloat) {
-            img_u8 = img.clamp(0, 1).mul(255).to(torch::kU8);
+        if (img_cpu.dtype() == torch::kFloat) {
+            img_u8 = img_cpu.clamp(0, 1).mul(255).to(torch::kU8);
         } else {
-            img_u8 = img.to(torch::kU8);
+            img_u8 = img_cpu.to(torch::kU8);
         }
 
         img_u8 = img_u8.contiguous();
