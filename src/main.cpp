@@ -28,12 +28,11 @@ int main(int argc, char **argv) {
             .W = 512
         },
         mini_pytorch3d::diffrast_args{
-            .sigma = 1,
+            .sigma = 1e-4,
         }, 
-        mini_pytorch3d::SIMPLE_RAST, 
-        true // requires_grad
+        mini_pytorch3d::SEQUENTIAL_DIFFRAST, 
+        /*requires_grad=*/true
     );
-    // std::cout << "Rendered image: " << diffrast_image << std::endl;
     std::cout << "Rendered image size: " << diffrast_image.sizes() << std::endl;
 
     mini_pytorch3d::save_tensor_as_png(diffrast_image, argv[2]);
