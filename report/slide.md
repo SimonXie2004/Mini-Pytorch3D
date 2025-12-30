@@ -241,6 +241,21 @@ Avg. Speedup = 64.81x
 
 ---
 
+## 3. Metrics (Render Time)
+
+- Pytorch3D = official differentiable rasterization
+- Parallel = parallel differentiable rasterization
+
+| Mesh | Vertices | Faces | Pytorch3D | Parallel | Rel. Speed |
+| --- | --- | --- | --- | --- | --- |
+| Stanford Dragon | 435545 | 871414 | 278ms | 162ms | 1.71x | 
+| Stanford Bunny | 34834 | 69451 | 172ms | 98ms | 1.775x | 
+| Utah Teapot | 3241 | 6320 | 165ms | 89ms | 1.85x | 
+
+Avg. Speedup = 1.778x
+
+---
+
 ## 4. Summary
 
 We implemented a differentiable rasterization kernel with:
