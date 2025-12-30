@@ -16,9 +16,10 @@ math: katex
     1.1 What is rasterization
     1.2 Why **differentiable rasterization**
 2. Efficient **differentiable rasterization** kernel implementation
-    2.1 **Online** Pixel Blending (Online Softmax)
-    2.2 **TILE** Based Rasterzation
-    2.3 **Parallel** Triangle Bincount
+    2.1 **Prerequisite**: Modern Rasterization Pipeline
+    2.2 **Online** Pixel Blending (Online Softmax)
+    2.3 **TILE** Based Rasterzation
+    2.4 **Parallel** Triangle Bincount
 3. Metrics
 4. Summary
 
@@ -52,31 +53,46 @@ Today is the era of **Deep Learning**. Can we learn **3D structures from 2D imag
 In the following case, red triangle contributes zero gradient. 
 ***Very brittle to optimize !!!!!*** This explains why pervious slide is not realistic.
 
-<img src="https://www.scratchapixel.com/images/rasterization/raytracing-raster5.png?" height=500px>
+<img src="https://www.scratchapixel.com/images/rasterization/raytracing-raster5.png?" height=450px>
 
 ---
 
 ## 2. Parallel Differentiable Rasterization Kernel
 
 Challenges:
-- **\[New Algorithm\]** Each pixel MUST receive contributions from **multiple triangles** to make it differentiable
-- **\[Efficiency\]** Need for **Speed**!!!!! (faster inference, faster training)
-- **\[Write Conflicts\]** Multiple threads writing **same image buffer**
+- **\[New Algorithm\]** Each pixel MUST receive contributions from **multiple triangles** to make it **differentiable**
+- **\[Time Efficiency\]** Need for **Speed**!!!!! (faster inference, faster training)
+- **\[Memory Efficiency\]** Multiple threads writing **same image buffer**
 
 Goal:
 > Design a **parallel/fast, work-efficient, differentiable** rasterization kernel.
 
 ---
 
-### 2.1 Online Pixel Blending (Online Softmax)
+### 2.1 Prerequisite: Modern Rasterization Pipeline
 
-To make it differentiable, we adopt a **softmax-based blending formulation** instead of hard visibility test.
-
-<img src="https://www.scratchapixel.com/images/rasterization/raytracing-raster5.png?" height=500px>
+<img src="images/rast.png" height=550px>
 
 ---
 
-### 2.1 Pixel Blending (Softmax)
+### 2.1 Prerequisite: Modern Rasterization Pipeline
+
+In step.3 (rasterization), the **visibility test** makes everything not differentiable.
+
+<img src="https://www.scratchapixel.com/images/rasterization/raytracing-raster5.png?" height=450px> 
+<img src="images/z-test.png" height=500px>
+
+---
+
+### 2.2 Online Pixel Blending (Online Softmax)
+
+To make it differentiable, we adopt a **softmax-based blending formulation** instead of hard visibility test.
+
+<img src="images/softras.png" height=450px>
+
+---
+
+### 2.2 Pixel Blending (Softmax)
 
 For pixel $p$, triangles $i \in \mathcal{T}_p$:
 
@@ -89,16 +105,16 @@ C_p = \frac{\sum_i w_i \cdot c_i}{\sum_i w_i}
 $$
 
 where:
+- $i$ denotes all triangles that contribute to this pixel
 - $z_i$: pixel depth
 - $c_i$: pixel color on the triangle
-- $\alpha$: sharpness parameter
 - $C_p$ finally blended color
 
 Result: All triangle colors (i.e. $c_i$) now have contribution! Hence differentiable
 
 ---
 
-### 2.1 Pixel Blending (Softmax)
+### 2.2 Pixel Blending (Softmax)
 
 For pixel $p$, triangles $i \in \mathcal{T}_p$:
 
@@ -110,15 +126,17 @@ $$
 C_p = \frac{\sum_i w_i \cdot c_i}{\sum_i w_i}
 $$
 
-**Problem**: This takes 3 passes. Rasterization loop is **Extremely Expensive**
+**Problem 1**: This takes 3 passes. Rasterization loop is **Extremely Expensive**
 
 1. calculate $z_{max}$
 2. calculate $\sum w_i c_i$
 3. normalize over $\sum w_i$
 
+**Problem 2**: Must save all $c_i$ per pixel. Ill-formed memory access (Since #$c_i$ is not constant per pixel.)
+
 ---
 
-### 2.1 Online Pixel Blending (Online Softmax)
+### 2.2 Online Pixel Blending (Online Softmax)
 
 Instead of storing all $w_i$, we compute blending **incrementally**:
 
@@ -142,7 +160,7 @@ $$
 
 ---
 
-### 2.1 Online Pixel Blending (Online Softmax)
+### 2.2 Online Pixel Blending (Online Softmax)
 
 This avoids:
 - Per-pixel triangle lists
@@ -155,7 +173,7 @@ Also, now only **two loops are enough!**
 
 ---
 
-### 2.2 Tile-Based Parallel Rasterization
+### 2.3 Tile-Based Parallel Rasterization
 
 Non-parallel version:
 - Suppose $N$ triangles, $K$ pixels per triangle
@@ -171,7 +189,7 @@ Naive tiled parallelization:
 
 ---
 
-### 2.2 Tile-Based Parallel Rasterization
+### 2.3 Tile-Based Parallel Rasterization
 
 <img src="images/binned_tiled.jpg" height=400px>
 
@@ -182,7 +200,7 @@ Distribute triangles to tiles ($O(N)$ work) and rasterize $(O(NK))$ work
 
 ---
 
-### 2.3 Parallel Triangle Bincount
+### 2.4 Parallel Triangle Bincount
 
 Key challenge:
 > Efficiently assign triangles to tiles **in parallel**
@@ -192,17 +210,18 @@ Steps:
 2. Emit `(triangle_id, tile_id)` pairs
 3. Perform **parallel bincount / prefix sum**
     (Now we have `int arr[tiles][max_triangles_per_tile]`)
+    (Note that `max_triangles_per_tile` is not constant)
 4. Flatten triangle lists per tile using **parallel exclusive sum**
-    (Flatten to `int arr[tiles\*max_triangles_per_tile]` increase memory locality)
+    (Flatten to `int *arr` increase memory locality, avoid waste of memory)
 
 ---
 
-### 2.3 Parallel Triangle Bincount
+### 2.4 Parallel Triangle Bincount
 
 Time Comparison:
 
 - Naive scan & distribute: $O(N)$
-- Parallel bincount + prefix sum: $O(\log N + \log B)$
+- Parallel bincount + prefix sum (to gather bins): $O(\log N + \log B)$
     suppose B is bin length; do prefix sum on bin length array
 
 ---
