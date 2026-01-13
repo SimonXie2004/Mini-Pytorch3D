@@ -8,7 +8,7 @@ namespace mini_pytorch3d {
 
     // full diffrential rasterization render function
     torch::Tensor render(const mesh& m, const camera& cam, 
-        const diffrast_args& args = {}, int render_mode = PARALLEL_DIFFRAST, bool requires_grad = false);
+        const diffrast_args& args = {}, int render_mode = PARALLEL_DIFFRAST, int grad_mode = NO_GRAD);
     
 }  // namespace mini_pytorch3d
 

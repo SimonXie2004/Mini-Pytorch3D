@@ -5,6 +5,7 @@ add_executable(mini_pytorch3d
     legacy.cpp
     ../cuda/diffrast.cu
     ../cuda/binning.cu
+    ../cuda/backward.cu
 )
 
 target_include_directories(mini_pytorch3d

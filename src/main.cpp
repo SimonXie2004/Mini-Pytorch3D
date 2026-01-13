@@ -15,7 +15,8 @@ int main(int argc, char **argv) {
     std::cout << "Parsed mesh with " << mesh.vertices.size(0) << " vertices and "
               << mesh.faces.size(0) << " faces." << std::endl;
 
-    auto diffrast_image = mini_pytorch3d::render(mesh, 
+    auto diffrast_image = mini_pytorch3d::render(
+        mesh, 
         mini_pytorch3d::camera{
             .position = {0.0f, 0.0f, 1.0f}, // supposes there is a light source here
             .look_at = {0.0f, 0.0f, 0.0f},
