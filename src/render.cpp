@@ -6,8 +6,7 @@
 #include <utility>
 
 #include <cuda.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAGuard.h> // get stream
 
 namespace mini_pytorch3d {
 
@@ -25,10 +24,11 @@ namespace mini_pytorch3d {
         const int64_t* faces,
         const int* tile_offsets,
         const int* tile_faces,
-        int W, int H, float sigma,
+        int W, int H, float sigma, float gamma, 
         const float* light_dir,
         float* out
     );
+    // implemenation in cuda/binning.cu (NOT here)
     void launch_binning_two_pass(
         const float* clip_pos,
         const float* inv_w,
@@ -40,6 +40,7 @@ namespace mini_pytorch3d {
         int* total_pairs_out,
         cudaStream_t stream
     );
+    // implementation in cuda/backward.cu (NOT here)
 
     torch::Tensor camera_to_mvp_matrix(const camera& cam) {
         torch::Tensor M = torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32));
@@ -182,7 +183,6 @@ namespace mini_pytorch3d {
         at::cuda::CUDAGuard guard(tb.clip_pos.device());
         cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
 
-        // move to cuda
         auto clip   = tb.clip_pos.contiguous();
         auto invw   = tb.inv_w.view({-1}).contiguous();
         auto colors = tb.colors.contiguous();
@@ -198,14 +198,11 @@ namespace mini_pytorch3d {
 
         // allocate binning output on cuda
         auto opts_i32 = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
-
         auto tile_offsets = torch::empty({num_tiles + 1}, opts_i32);
         auto total_pairs_dev = torch::empty({1}, opts_i32);
-        int64_t cap = (int64_t)F * MAX_TILES_PER_TRIANGLE;
-        if (cap < 1) cap = 1;
+        int64_t cap = std::max((int64_t)F * MAX_TILES_PER_TRIANGLE, 1l);
         auto tile_faces_flat_cap = torch::empty({cap}, opts_i32);
 
-        // two pass binning
         launch_binning_two_pass(
             clip.data_ptr<float>(),
             invw.data_ptr<float>(),
@@ -226,8 +223,6 @@ namespace mini_pytorch3d {
                     "tile_faces_flat capacity too small: total_pairs=", total_pairs,
                     " cap=", cap,
                     " (increase cap multiplier, e.g., F*16)");
-
-        // slice exact used range
         auto tile_faces_flat = tile_faces_flat_cap.narrow(0, 0, total_pairs);
 
         // output & rast kernel
@@ -246,7 +241,7 @@ namespace mini_pytorch3d {
             tile_faces_flat.data_ptr<int>(),
             image_width,
             image_height,
-            args.sigma,
+            args.sigma, args.gamma, 
             light.data_ptr<float>(),
             out.data_ptr<float>()
         );

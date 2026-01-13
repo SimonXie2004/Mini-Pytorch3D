@@ -1,6 +1,6 @@
 # Mini-Pytorch3D
 
-> CS121 (Parallel Computing) Final Project: Parallel diffrast forward kernel
+> CS121 (Parallel Computing) Final Project: Parallel Differentiable Rasterization Kernel
 
 <table width="100%">
   <tr>
@@ -15,6 +15,12 @@
     </td>
   </tr>
 </table>
+
+## TODO
+
+- [x] Edge weight (gamma) and depth weight (sigma) in forward render
+- [ ] Add gradient backward pass
+
 
 ## Environment Setup
 

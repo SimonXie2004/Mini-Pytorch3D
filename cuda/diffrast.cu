@@ -6,6 +6,11 @@
 namespace mini_pytorch3d {
 
     __device__ __forceinline__
+    float sigmoid(float x) {
+        return 1.f / (1.f + expf(-x));
+    }
+
+    __device__ __forceinline__
     float edge_fn(float ax, float ay, float bx, float by, float px, float py) {
         return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
     }
@@ -61,7 +66,7 @@ namespace mini_pytorch3d {
         const int64_t* faces,
         const int32_t* tile_offsets,
         const int32_t* tile_faces,
-        int W, int H, float sigma,
+        int W, int H, float sigma, float gamma, 
         const float* light_dir,
         float* out
     ) {
@@ -125,12 +130,28 @@ namespace mini_pytorch3d {
             float e1 = edge_fn(sx2, sy2, sx0, sy0, px_c, py_c);
             float e2 = edge_fn(sx0, sy0, sx1, sy1, px_c, py_c);
 
-            bool inside =
-                (e0 > 0 || (e0 == 0 && is_top_left(sx1, sy1, sx2, sy2))) &&
-                (e1 > 0 || (e1 == 0 && is_top_left(sx2, sy2, sx0, sy0))) &&
-                (e2 > 0 || (e2 == 0 && is_top_left(sx0, sy0, sx1, sy1)));
+            float dx01 = sx2 - sx1;
+            float dy01 = sy2 - sy1;
+            float dx12 = sx0 - sx2;
+            float dy12 = sy0 - sy2;
+            float dx20 = sx1 - sx0;
+            float dy20 = sy1 - sy0;
 
-            if (!inside) continue;
+            float len0 = sqrtf(dx01*dx01 + dy01*dy01) + 1e-6f;
+            float len1 = sqrtf(dx12*dx12 + dy12*dy12) + 1e-6f;
+            float len2 = sqrtf(dx20*dx20 + dy20*dy20) + 1e-6f;
+            
+            // in case not clockwise!!!! VERY important!!!
+            float area_sign = (area > 0.0f) ? 1.0f : -1.0f; 
+
+            float d0 = e0 / len0 * area_sign;
+            float d1 = e1 / len1 * area_sign;
+            float d2 = e2 / len2 * area_sign;
+
+            float c0 = sigmoid(d0 / gamma);
+            float c1 = sigmoid(d1 / gamma);
+            float c2 = sigmoid(d2 / gamma);
+            float coverage = c1 * c2 * c0;
 
             float b0 = e0 / area;
             float b1 = e1 / area;
@@ -164,11 +185,13 @@ namespace mini_pytorch3d {
 
             sh_sum[tid] = sh_sum[tid] * rescale + exp_new;
             sh_sum_c[tid] = f3_add(
-                f3_mul(sh_sum_c[tid], rescale), 
-                f3_mul(col, exp_new)
+                f3_mul(sh_sum_c[tid], rescale), // scaled old color
+                f3_mul(f3_mul(col, exp_new), coverage) // weighted new color
             );
             sh_max[tid] = new_max;
         }
+
+        __syncthreads();
 
         if (px < W && py < H && sh_sum[tid] > 0) {
             float3 c = f3_mul(sh_sum_c[tid], 1.f / sh_sum[tid]);
@@ -188,7 +211,7 @@ namespace mini_pytorch3d {
         const int64_t* faces,
         const int32_t* tile_offsets,
         const int32_t* tile_faces,
-        int W, int H, float sigma,
+        int W, int H, float sigma, float gamma, 
         const float* light_dir,
         float* out
     ) {
@@ -204,7 +227,7 @@ namespace mini_pytorch3d {
             faces,
             tile_offsets,
             tile_faces,
-            W, H, sigma,
+            W, H, sigma, gamma, 
             light_dir,
             out
         );

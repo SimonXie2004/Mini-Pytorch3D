@@ -28,10 +28,11 @@ int main(int argc, char **argv) {
             .W = 512
         },
         mini_pytorch3d::diffrast_args{
-            .sigma = 1e-4f,
+            .sigma = 1e-4f, // try 1.0f for depth weights
+            .gamma = 1e-4f, // try 1.0f for edge weights
         }, 
-        mini_pytorch3d::SEQUENTIAL_DIFFRAST, 
-        /*requires_grad=*/true
+        mini_pytorch3d::PARALLEL_DIFFRAST, 
+        mini_pytorch3d::REQUIRES_GRAD
     );
     std::cout << "Rendered image size: " << diffrast_image.sizes() << std::endl;
 

@@ -228,7 +228,7 @@ Time Comparison:
 
 ## 3. Metrics (Render Time)
 
-- Sequential = sequential differentiable rasterization
+- Sequential = sequential differentiable rasterization (trivial baseline)
 - Parallel = parallel differentiable rasterization
 
 | Mesh | Vertices | Faces | Sequential | Parallel | Rel. Speed |
@@ -243,16 +243,16 @@ Avg. Speedup = 64.81x
 
 ## 3. Metrics (Render Time)
 
-- Pytorch3D = official differentiable rasterization
+- Pytorch3D = official CUDA-Based differentiable rasterization
 - Parallel = parallel differentiable rasterization
 
 | Mesh | Vertices | Faces | Pytorch3D | Parallel | Rel. Speed |
 | --- | --- | --- | --- | --- | --- |
 | Stanford Dragon | 435545 | 871414 | 278ms | 162ms | 1.71x | 
-| Stanford Bunny | 34834 | 69451 | 172ms | 98ms | 1.775x | 
+| Stanford Bunny | 34834 | 69451 | 172ms | 98ms | 1.78x | 
 | Utah Teapot | 3241 | 6320 | 165ms | 89ms | 1.85x | 
 
-Avg. Speedup = 1.778x
+Avg. Speedup = 1.78x
 
 ---
 
@@ -266,7 +266,8 @@ We implemented a differentiable rasterization kernel with:
 Key contributions:
 - Work/Time-efficient differentiable rendering
 - GPU-friendly kernel structure
-- ~64x Speedup
+- ~64x Speedup to Trivial Baseline
+- ~1.7x Speedup to Pytorch3D Impl
 
 ---
 

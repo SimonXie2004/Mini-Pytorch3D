@@ -11,6 +11,11 @@ namespace mini_pytorch3d {
         SIMPLE_RAST = 2
     }; 
 
+    enum grad_options {
+        REQUIRES_GRAD = 0, 
+        NO_GRAD = 1
+    }; 
+
     using vec2 = std::array<float, 2>;
     using vec3 = std::array<float, 3>;
 
@@ -47,7 +52,7 @@ namespace mini_pytorch3d {
 
     struct diffrast_args {
         float sigma;
-        float gamma = 1e-4f; // for anti-aliasing use, not used for simplicity
+        float gamma; 
     };
 
     struct triangle_buffer {

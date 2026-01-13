@@ -16,4 +16,5 @@ cmake -S . -B build \
 # cmake --build <build_dir> [--target <tgt>] [--config <cfg>] [-- -jN]
 cmake --build build -j$(nproc)
 
+# export CUDA_LAUNCH_BLOCKING=1
 ./build/src/mini_pytorch3d data/utah_teapot.obj output/output.png
